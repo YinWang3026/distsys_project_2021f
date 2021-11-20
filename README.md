@@ -22,3 +22,9 @@
 
 1. [Dynamo: Amazon’s Highly Available Key-value Store](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf).
 2. [Quantifying eventual consistency with PBS](https://shivaram.org/publications/pbs-vldb-journal.pdf).
+
+## Merkle Tree
+
+- Implemented using a Binary Search Tree
+- Each node holds the hash of itself and its children
+- Only supports appending because Dynamos will only make 2 calls, get() and put()
