@@ -1,6 +1,6 @@
 defmodule MerkleTreeTest do
     use ExUnit.Case
-    doctest Dynamo
+    doctest MerkleTree
     import Kernel,
         except: [spawn: 3, spawn: 1, spawn_link: 1, spawn_link: 3, send: 2]
     # defp create_empty_log() do

@@ -26,7 +26,7 @@
 ## Each Node holds a hash, which is the combined hash of itself and its children
 ## Each Node holds a value, which is the hash value of some value stored in map
 
-defmodule Dynamo.MerkleTree do
+defmodule MerkleTree do
     @moduledoc """
     MerkleTree implementation.
     """
