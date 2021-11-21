@@ -32,7 +32,6 @@ defmodule MerkleTree do
     """
     import Kernel, except: [spawn: 3, spawn: 1, spawn_link: 1, spawn_link: 3, send: 2]
     alias __MODULE__
-    @type bytes :: <<_::_*8>>
     @enforce_keys [:matrix, :root_level, :leaf_count]
     defstruct(
         matrix: nil, # The matrix holding the tree
@@ -48,28 +47,45 @@ defmodule MerkleTree do
     used for convenience.
     """
     @spec new() :: %MerkleTree{
-                        matrix: list(),
-                        root_level: non_neg_integer(),
-                        leaf_count: non_neg_integer()
-                    }
+        matrix: list(),
+        root_level: non_neg_integer(),
+        leaf_count: non_neg_integer()
+    }
     def new() do
-        %MerkleTree{matrix: [], root_level: 0, leaf_count: 0 }
+        %MerkleTree{ matrix: [], root_level: 0, leaf_count: 0 }
     end
 
-    # @doc """
-    # Return a Merkle Tree with the new value inserted.
-    # """
-    # @spec insert(bytes) :: %MerkleTree{}
-    # def insert(bytes) do
+    @doc """
+    Return a Merkle Tree with the new value inserted.
+    Bytes must be type binary (hashed), aka size % 8 == 0
+    """
+    @spec insert(%MerkleTree{}, binary()) :: %MerkleTree{
+        matrix: list(),
+        root_level: non_neg_integer(),
+        leaf_count: non_neg_integer()
+    }
+    def insert(tree, bytes) when is_binary(bytes) do
+        IO.inspect(bytes, binaries: :as_binaries)
+        tree
+    end
 
-    # end
+    @doc """
+    Return the root hash.
+    """
+    @spec get_root_hash(%MerkleTree{}) :: :no_root | binary()
+    def get_root_hash(tree) do
+        if tree.root_level == 0 do
+            :no_root
+        else
+            # Return the first item on root_level
+            root_list = Enum.at(tree.matrix, tree.root_level)
+            if length(root_list == 0) do # Error check in case
+                :no_root
+            else # Root exists
+                hd(root_list)
+            end
+        end
+    end
 
-    # @doc """
-    # Return the root hash.
-    # """
-    # @spec get_root_hash(%MerkleTree) :: bytes
-    # def insert(tree) do
-
-    # end
 end
 
