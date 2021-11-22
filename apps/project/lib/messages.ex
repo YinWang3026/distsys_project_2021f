@@ -1,4 +1,7 @@
 defmodule Context do
+    @typedoc """
+    Metadata for get/put messages, contains version and hint info.
+    """
     alias __MODULE__
 
     @type t() :: %__MODULE__{
@@ -39,6 +42,9 @@ defmodule Context do
   end
   
   defmodule ClientGetRequest do
+    @typedoc """
+    Get request sent by client.
+    """
     alias __MODULE__
 
     @type t() :: %__MODULE__{
@@ -55,6 +61,9 @@ defmodule Context do
   end
   
   defmodule ClientGetResponse do
+    @typedoc """
+    Response to get request received by client
+    """
     alias __MODULE__
 
     @type t() :: %__MODULE__{
@@ -74,6 +83,9 @@ defmodule Context do
   end
   
   defmodule ClientPutRequest do
+    @typedoc """
+    Put request sent by client.
+    """
     alias __MODULE__
 
     @type t() :: %__MODULE__{
@@ -94,6 +106,9 @@ defmodule Context do
   end
   
   defmodule ClientPutResponse do
+    @typedoc """
+    Response to put request received by client.
+    """
     alias __MODULE__
 
     @type t() :: %__MODULE__{
@@ -113,6 +128,9 @@ defmodule Context do
   end
 
   defmodule CoordinatorGetRequest do
+    @typedoc """
+    Get request sent by coordinator to a dynamo node.
+    """
     alias __MODULE__
 
     @type t() :: %__MODULE__{
@@ -129,6 +147,9 @@ defmodule Context do
   end
   
   defmodule CoordinatorGetResponse do
+    @typedoc """
+    Response to get request sent by coordinator.
+    """
     alias __MODULE__
 
     @type t() :: %__MODULE__{
@@ -146,6 +167,9 @@ defmodule Context do
   end
   
   defmodule CoordinatorPutRequest do
+    @typedoc """
+    Put request sent by coordinator to a dynamo node.
+    """
     alias __MODULE__
 
     @type t() :: %__MODULE__{
@@ -166,6 +190,9 @@ defmodule Context do
   end
   
   defmodule CoordinatorPutResponse do
+    @typedoc """
+    Response to put request sent by coordinator.
+    """
     alias __MODULE__
 
     @type t() :: %__MODULE__{
