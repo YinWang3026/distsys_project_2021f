@@ -208,4 +208,93 @@ defmodule Context do
       :context
     )
   end
+
+  defmodule GetStateRequest do
+    @typedoc """
+    Request to get the current state of a node, used for testing.
+    """
+    alias __MODULE__
+
+    @type t() :: %__MODULE__{
+        nonce: pos_integer(),
+    }
+    
+    @enforce_keys [:nonce]
+    defstruct (
+      :nonce,
+    )
+  end
+
+  defmodule GetStateResponse do
+    @typedoc """
+    Returns the current state of node, used for testing.
+    """
+    alias __MODULE__
+
+    @type t() :: %__MODULE__{
+        nonce: pos_integer(),
+        state: %DynamoNode{}
+    }
+    
+    @enforce_keys [:nonce, :state]
+    defstruct (
+      :nonce,
+      :state
+    )
+  end
+
+  defmodule RedirectedClientRequest do
+    @typedoc """
+    Returns the client request if current node is not the coordinator.
+    """
+
+    alias __MODULE__
+
+    @type t() :: %__MODULE__{
+        client: any(),
+        request: %ClientGetRequest{} | %ClientPutRequest{}
+    }
+    
+    @enforce_keys [:client, :request]
+    defstruct (
+      :client,
+      :request
+    )
+  end
+
+  defmodule HandoffRequest do
+    @typedoc """
+    Handoff hinted data to original owner.
+    """
+
+    alias __MODULE__
+
+    @type t() :: %__MODULE__{
+        nonce: pos_integer(),
+        data: %{required(any()) => {[any()], %Context{}}}
+    }
+    
+    @enforce_keys [:nonce, :data]
+    defstruct (
+      :nonce,
+      :data
+    )
+  end
+  
+  defmodule HandoffResponse do
+    @typedoc """
+      Handoff request ack.
+    """
+
+    alias __MODULE__
+
+    @type t() :: %__MODULE__{
+        nonce: pos_integer(),
+    }
+    
+    @enforce_keys [:nonce]
+    defstruct (
+      :nonce
+    )
+  end
   
