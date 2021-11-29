@@ -10,10 +10,10 @@ defmodule Context do
     }
     
     @enforce_keys [:version]
-    defstruct (
+    defstruct([
       :version,
       :hint
-    )
+    ])
   
     def compare(ctx1, ctx2) do
       VectorClock.compare(ctx1.version, ctx2.version)
@@ -53,10 +53,10 @@ defmodule Context do
     }
     
     @enforce_keys [:nonce, :key]
-    defstruct (
+    defstruct([
       :nonce,
       :key
-    )
+    ])
 
   end
   
@@ -74,12 +74,12 @@ defmodule Context do
     }
     
     @enforce_keys [:nonce, :success, :values, :context]
-    defstruct (
+    defstruct([
       :nonce,
       :success,
       :values,
       :context
-    )
+    ])
   end
   
   defmodule ClientPutRequest do
@@ -96,12 +96,12 @@ defmodule Context do
     }
     
     @enforce_keys [:nonce, :key, :value, :context]
-    defstruct (
+    defstruct([
       :nonce,
       :key,
       :value,
       :context
-    )   
+    ])   
     
   end
   
@@ -119,12 +119,12 @@ defmodule Context do
     }
     
     @enforce_keys [:nonce, :success, :value, :context]
-    defstruct (
+    defstruct([
       :nonce,
       :success,
       :value,
       :context
-    )
+    ])
   end
 
   defmodule CoordinatorGetRequest do
@@ -139,10 +139,10 @@ defmodule Context do
     }
     
     @enforce_keys [:nonce, :key]
-    defstruct (
+    defstruct([
       :nonce,
       :key
-    )
+    ])
 
   end
   
@@ -159,11 +159,11 @@ defmodule Context do
     }
     
     @enforce_keys [:nonce, :values, :context]
-    defstruct (
+    defstruct([
       :nonce,
       :values,
       :context
-    )
+    ])
   end
   
   defmodule CoordinatorPutRequest do
@@ -180,12 +180,12 @@ defmodule Context do
     }
     
     @enforce_keys [:nonce, :key, :value, :context]
-    defstruct (
+    defstruct([
       :nonce,
       :key,
       :value,
       :context
-    )   
+    ])   
     
   end
   
@@ -196,17 +196,13 @@ defmodule Context do
     alias __MODULE__
 
     @type t() :: %__MODULE__{
-        nonce: pos_integer(),
-        value: any(),
-        context: %Context{}
+        nonce: pos_integer()
     }
     
-    @enforce_keys [:nonce, :value, :context]
-    defstruct (
-      :nonce,
-      :value,
-      :context
-    )
+    @enforce_keys [:nonce]
+    defstruct([
+      :nonce
+    ])
   end
 
   defmodule GetStateRequest do
@@ -220,9 +216,9 @@ defmodule Context do
     }
     
     @enforce_keys [:nonce]
-    defstruct (
-      :nonce,
-    )
+    defstruct([
+      :nonce
+    ])
   end
 
   defmodule GetStateResponse do
@@ -237,10 +233,10 @@ defmodule Context do
     }
     
     @enforce_keys [:nonce, :state]
-    defstruct (
+    defstruct([
       :nonce,
       :state
-    )
+    ])
   end
 
   defmodule RedirectedClientRequest do
@@ -256,10 +252,25 @@ defmodule Context do
     }
     
     @enforce_keys [:client, :request]
-    defstruct (
+    defstruct([
       :client,
       :request
-    )
+    ])
+  end
+
+  defmodule RedirectAcknowledgement do
+    @typedoc """
+      Acknowledgement for a redirect.
+    """
+    alias __MODULE__
+    @type t() :: %__MODULE__{
+      nonce: pos_integer()
+    }
+  
+    @enforce_keys [:nonce]
+    defstruct([
+      :nonce
+    ])
   end
 
   defmodule HandoffRequest do
@@ -275,10 +286,10 @@ defmodule Context do
     }
     
     @enforce_keys [:nonce, :data]
-    defstruct (
+    defstruct([
       :nonce,
       :data
-    )
+    ])
   end
   
   defmodule HandoffResponse do
@@ -293,8 +304,8 @@ defmodule Context do
     }
     
     @enforce_keys [:nonce]
-    defstruct (
+    defstruct([
       :nonce
-    )
+    ])
   end
   
