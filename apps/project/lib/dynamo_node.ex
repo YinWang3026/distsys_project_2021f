@@ -41,13 +41,14 @@ defmodule DynamoNode do
     # Timeout for syncing using merkle tree
     merkle_sync_timeout: pos_integer(),
 
-    # Number of sconds a node should wait for a response
+    # Number of seconds a node should wait for a response
     request_timeout: pos_integer(),
 
     # Number of seconds after which the node checks if other nodes are alive
     health_check_timeout: pos_integer(),
 
     # For coordinator, the number of gets to wait for before responsing to client (R)
+    # {nonce => %{}}
     gets_queue: %{
         required(pos_integer()) => %{
             client: any(),
@@ -58,6 +59,7 @@ defmodule DynamoNode do
     },
 
     # For coordinator, the number of puts to wait for before responsing to client (W)
+    # {nonce => %{}}
     puts_queue: %{
         required(pos_integer()) => %{
                 client: any(),
@@ -71,6 +73,7 @@ defmodule DynamoNode do
     },
 
     # Pending redirect requests to be forwarded to the coordinator
+    # {nonce => %{}}
     redirect_queue: %{
         required(pos_integer) => %{
             client: any(),
@@ -80,6 +83,7 @@ defmodule DynamoNode do
     },
 
     # Pending handoffs to be forwarded to the appropriate node
+    # {node => %{}}
     handoffs_queue: %{
       required(any()) => %{
         required(pos_integer()) => %{
@@ -173,7 +177,7 @@ defmodule DynamoNode do
 
     alive_nodes =
       nodes
-      |> List.delete(id)
+      |> List.delete(id) # Take out self
       |> Map.new(fn node -> {node, true} end)
 
     state = %DynamoNode{
@@ -206,9 +210,12 @@ defmodule DynamoNode do
   @spec listener(%DynamoNode{}) :: no_return()
   def listener(state) do
     receive do
-      # client requests
+      # client get request
       {client, %ClientGetRequest{} = msg} ->
         Logger.info("Received #{inspect(msg)} from #{inspect(client)}")
+
+        # start timer for handling the client :get request
+        timer(state.client_timeout, {:client_timeout, :get, msg.nonce})
 
         state =
           handle_client_request(
@@ -220,8 +227,12 @@ defmodule DynamoNode do
 
         listener(state)
 
+      # client put request
       {client, %ClientPutRequest{} = msg} ->
         Logger.info("Received #{inspect(msg)} from #{inspect(client)}")
+
+        # start timer for handling the client :put request
+        timer(state.client_timeout, {:client_timeout, :put, msg.nonce})
 
         state =
           handle_client_request(
@@ -233,11 +244,11 @@ defmodule DynamoNode do
 
         listener(state)
 
-      # coordinator requests
+      # coordinator get request
       {coordinator, %CoordinatorGetRequest{nonce: nonce, key: key} = msg} ->
         Logger.info("Received #{inspect(msg)} from #{inspect(coordinator)}")
+        
         state = mark_alive(state, coordinator)
-
         stored = Map.get(state.store, key)
 
         {resp_values, resp_context} =
@@ -252,20 +263,16 @@ defmodule DynamoNode do
         send(coordinator, %CoordinatorGetResponse{
           nonce: nonce,
           values: resp_values,
-          # remove the hint since the correct coordinator recieved it
+          # remove the hint since the correct coordinator received it
           context: %{resp_context | hint: nil}
         })
 
         listener(state)
 
-      {coordinator,
-       %CoordinatorPutRequest{
-         nonce: nonce,
-         key: key,
-         value: value,
-         context: context
-       } = msg} ->
+      {coordinator, %CoordinatorPutRequest{nonce: nonce, key: key,
+        value: value, context: context} = msg} ->
         Logger.info("Received #{inspect(msg)} from #{inspect(coordinator)}")
+
         state = mark_alive(state, coordinator)
         state = local_put(state, key, [value], context)
 
@@ -285,41 +292,45 @@ defmodule DynamoNode do
       # node responses to coordinator requests
       {node, %CoordinatorGetResponse{} = msg} ->
         Logger.info("Received #{inspect(msg)} from #{inspect(node)}")
+
         state = mark_alive(state, node)
         state = coordinator_get_response(state, node, msg)
         listener(state)
 
       {node, %CoordinatorPutResponse{} = msg} ->
         Logger.info("Received #{inspect(msg)} from #{inspect(node)}")
+
         state = mark_alive(state, node)
         state = coordinator_put_response(state, node, msg)
         listener(state)
 
       # redirects from other nodes
-      {node,
-      %RedirectedClientRequest{
+      {node, %RedirectedClientRequest{
         client: client,
         request: %ClientGetRequest{nonce: nonce} = orig_msg
       } = msg} ->
         Logger.info("Received #{inspect(msg)} from #{inspect(node)}")
+
         state = mark_alive(state, node)
         # let redirecter know we're handling this request
         send(node, %RedirectAcknowledgement{nonce: nonce})
         # we must be the coordinator for this key
         state = coordinator_get_request(state, client, orig_msg)
+
         listener(state)
 
-      {node,
-      %RedirectedClientRequest{
+      {node, %RedirectedClientRequest{
         client: client,
         request: %ClientPutRequest{nonce: nonce} = orig_msg
       } = msg} ->
         Logger.info("Received #{inspect(msg)} from #{inspect(node)}")
+
         state = mark_alive(state, node)
         # let redirecter know we're handling this request
         send(node, %RedirectAcknowledgement{nonce: nonce})
         # we must be the coordinator for this key
         state = coordinator_put_request(state, client, orig_msg)
+
         listener(state)
 
       {node, %RedirectAcknowledgement{nonce: nonce} = msg} ->
@@ -334,23 +345,33 @@ defmodule DynamoNode do
 
         listener(state)
 
-
       # timeouts
       # client request timeouts at coordinator
       {:client_timeout, :get, nonce} = msg ->
-        Logger.info("Received #{inspect(msg)}")
+        Logger.info("Received #{inspect(msg)} from :client_timeout")
+
+        # time up for redirect attempts, give up now
+        state = 
+          case Map.get(state.redirect_queue, nonce) do
+            nil ->
+              # request already been handled
+              state
+            true ->
+              # redirect request still in queue, remove it
+              %{
+                state
+                | redirect_queue: Map.delete(state.redirect_queue, nonce)
+              }
+          end
+
         req_state = Map.get(state.gets_queue, nonce)
 
         if req_state == nil do
+          # request already handled
           listener(state)
         else
           # get rid of the pending entry and respond failure to client
-          send(req_state.client, %ClientGetResponse{
-            nonce: nonce,
-            success: false,
-            values: nil,
-            context: nil
-          })
+          send(req_state.client, client_fail_msg(:get, nonce))
 
           listener(%{
             state
@@ -359,10 +380,26 @@ defmodule DynamoNode do
         end
 
       {:client_timeout, :put, nonce} = msg ->
-        Logger.info("Received #{inspect(msg)}")
+        Logger.info("Received #{inspect(msg)} from :client_timeout")
+
+        # time up for redirect attempts, give up now
+        state = 
+          case Map.get(state.redirect_queue, nonce) do
+            nil ->
+              # request already been handled
+              state
+            true ->
+              # redirect request still in queue, remove it
+              %{
+                state
+                | redirect_queue: Map.delete(state.redirect_queue, nonce)
+              }
+          end
+
         req_state = Map.get(state.puts_queue, nonce)
 
         if req_state == nil do
+          # request already handled
           listener(state)
         else
           # get rid of the pending entry and respond failure to client
@@ -417,6 +454,7 @@ defmodule DynamoNode do
                 nonce: nonce,
                 key: key
               },
+              :request_timeout, # using request timeout
               {:coordinator_request_timeout, :get, nonce, new_node}
             )
 
@@ -503,6 +541,7 @@ defmodule DynamoNode do
                 value: value,
                 context: %{context | hint: new_hint}
               },
+              :request_timeout, # using request timeout
               {:coordinator_request_timeout, :put, nonce, new_node}
             )
 
@@ -529,34 +568,13 @@ defmodule DynamoNode do
           end
         end
 
-      # redirect timeouts
-      {:redirect_timeout, nonce} = msg ->
-        # time up for redirect attempts, give up now
-        Logger.info("Received #{inspect(msg)}")
-
-        case Map.get(state.redirect_queue, nonce) do
-          nil ->
-            # request already been handled
-            listener(state)
-
-          %{client: client, get_or_put: get_or_put} ->
-            # pending for too long, just fail the request
-            send(client, client_fail_msg(get_or_put, nonce))
-
-            state = %{
-              state
-              | redirect_queue: Map.delete(state.redirect_queue, nonce)
-            }
-
-            listener(state)
-        end
-
-      {:redirect_timeout_temp, nonce, failed_coord} = msg ->
+      {:redirect_timeout, nonce, failed_coord} = msg ->
         # redirect attempt failed, try again
         Logger.info("Received #{inspect(msg)}")
 
         if not Map.has_key?(state.redirect_queue, nonce) do
           # request already been handled successfully
+          # or :client_timeout happened, and redirect request is removed
           listener(state)
         else
           # retry redirecting
@@ -573,6 +591,7 @@ defmodule DynamoNode do
           send(node, :alive_check_request)
         end
 
+        # restart the timer
         timer(state.health_check_timeout, :health_check_timeout)
         listener(state)
 
@@ -591,6 +610,9 @@ defmodule DynamoNode do
       :merkle_sync_timeout = msg ->
         Logger.info("Received #{inspect(msg)}")
         #TODO: Add merkle tree logic
+
+        # restart the timer
+        timer(state.merkle_sync_timeout, :merkle_sync_timeout)
         listener(state)
 
       # testing
@@ -612,7 +634,7 @@ defmodule DynamoNode do
   @doc """
   Send failure message to client
   """
-  @spec client_fail_msg(:get | :put,  pos_integer()) :: %ClientGetResponse{} | %ClientPutResponse{}
+  @spec client_fail_msg(:get | :put, pos_integer()) :: %ClientGetResponse{} | %ClientPutResponse{}
   def client_fail_msg(get_or_put, nonce) do
     if get_or_put == :get do
         %ClientGetResponse{
@@ -669,19 +691,24 @@ defmodule DynamoNode do
         merge_values(new_value, orig_value)
       end)
 
+    ## TODO ### 
+    ## MERKLE TREE ####
+
     %{state | store: new_store}
   end
 
   @doc """
   Start retry timer and send message to process
   """
-  @spec send_with_timeout(%DynamoNode{}, any(), any(), any()) ::
-          :ok
-  def send_with_timeout(state, node, msg, timeout_msg) do
+  @spec send_with_timeout(%DynamoNode{}, any(), any(), 
+    :redirect_timeout | :request_timeout, any()) :: :ok
+  def send_with_timeout(state, node, msg, timeout, timeout_msg) do
     if state.id == node do
         send(node, msg)
     else
-        timer(state.request_timeout, timeout_msg)
+        # create a timer with given timeout
+        # timeout should be either request timeout, or redirect timeout
+        timer(Map.get(state, timeout), timeout_msg)
         send(node, msg)
     end
   end
@@ -771,6 +798,7 @@ defmodule DynamoNode do
           nonce: nonce,
           data: handoff_data
         },
+        :request_timeout, # using request timeout
         {:handoff_timeout, nonce, node}
       )
 
@@ -790,7 +818,7 @@ defmodule DynamoNode do
   end
 
   @doc """
-  Get the preference list for a particular key
+  Get the preference list (coordinators) for a particular key
   """
   @spec get_preference_list(%DynamoNode{}, any()) :: [any()]
   def get_preference_list(state, key) do
@@ -821,9 +849,10 @@ defmodule DynamoNode do
   Redirect, or reply failure to an incoming
   client request after a redirect failure.
   """
-  @spec redirect_or_fail_client_request(%DynamoNode{}, Nonce.t()) ::
+  @spec redirect_or_fail_client_request(%DynamoNode{}, pos_integer()) ::
           %DynamoNode{}
   def redirect_or_fail_client_request(state, nonce) do
+    
     %{
       client: client,
       msg: received_msg,
@@ -842,6 +871,7 @@ defmodule DynamoNode do
             client: client,
             request: received_msg
           },
+          :redirect_timeout, # using redirect timeout
           {:redirect_timeout, nonce, coord}
         )
 
@@ -862,6 +892,8 @@ defmodule DynamoNode do
   @doc """
   Handle, redirect, or reply failure to an incoming client request.
   """
+  @spec handle_client_request(%DynamoNode{}, %ClientGetRequest{} | %ClientPutRequest{}, 
+    any(), :get | :put) :: %DynamoNode{}
   def handle_client_request(state, msg, client, get_or_put) do
     coord_handler =
       if get_or_put == :get do
@@ -874,11 +906,6 @@ defmodule DynamoNode do
       # handle the request as coordinator
       coord_handler.(state, client, msg)
     else
-      # start a timer so we know to stop retrying redirects
-      timer(
-        state.redirect_timeout,
-        {:redirect_timeout, msg.nonce}
-      )
 
       # put it in pending redirects
       state = %{
@@ -922,36 +949,34 @@ defmodule DynamoNode do
   def coordinator_get_request(state, client, %ClientGetRequest{
     nonce: nonce,
     key: key
-    }) do
+  }) do
+
     alive_pref_list = get_alive_preference_list(state, key)
 
     Enum.each(alive_pref_list, fn node ->
-    # DO send get request to self
-        send_with_timeout(
+      # DO send get request to self
+      send_with_timeout(
         state,
         node,
         %CoordinatorGetRequest{
-            nonce: nonce,
-            key: key
+          nonce: nonce,
+          key: key
         },
+        :request_timeout, # using request timeout
         {:coordinator_request_timeout, :get, nonce, node}
-        )
+      )
     end)
 
-    # start timer for the responses
-    timer(state.client_timeout, {:client_timeout, :get, nonce})
-
-    %{
-    state
-    | gets_queue:
-    Map.put(state.gets_queue, nonce, %{
+    %{ state
+      | gets_queue:
+      Map.put(state.gets_queue, nonce, %{
         client: client,
         key: key,
         responses: %{},
         requested: MapSet.new(alive_pref_list)
-    })
+      })
     }
-    end
+  end
 
   @doc """
   Handle get response as coordinator and send to client.
@@ -963,10 +988,11 @@ defmodule DynamoNode do
   """
   @spec coordinator_get_response(%DynamoNode{}, any(), %CoordinatorGetResponse{}) :: %DynamoNode{}
   def coordinator_get_response(state, node, %CoordinatorGetResponse{
-        nonce: nonce,
-        values: values,
-        context: context
-      }) do
+    nonce: nonce,
+    values: values,
+    context: context
+  }) do
+
     old_req_state = Map.get(state.gets_queue, nonce)
 
     new_req_state =
@@ -1024,11 +1050,12 @@ defmodule DynamoNode do
   @spec coordinator_put_request(%DynamoNode{}, any(), %ClientPutRequest{}) ::
           %DynamoNode{}
   def coordinator_put_request(state, client, %ClientPutRequest{
-        nonce: nonce,
-        key: key,
-        value: value,
-        context: context
-      }) do
+    nonce: nonce,
+    key: key,
+    value: value,
+    context: context
+  }) do
+
     context = %{context | version: VectorClock.tick(context.version, state.id)}
 
     # write to own store
@@ -1049,6 +1076,7 @@ defmodule DynamoNode do
           value: value,
           context: %{context | hint: hint}
         },
+        :request_timeout,
         {:coordinator_request_timeout, :put, nonce, node}
       )
     end)
@@ -1069,36 +1097,37 @@ defmodule DynamoNode do
       })
 
       state
-    else
-      # otherwise, start timer for the responses and mark pending
-      timer(
-        state.coordinator_timeout,
-        {:total_coordinator_timeout, :put, nonce}
-      )
+    # else
+    #   # otherwise, start timer for the responses and mark pending
+    #   timer(
+    #     state.coordinator_timeout,
+    #     ## TODO### This timeout may be wrong
+    #     {:total_coordinator_timeout, :put, nonce}
+    #   )
 
-      all_nodes =
-        Ring.find_nodes(state.ring, key, map_size(state.alive_nodes) + 1)
+    #   all_nodes =
+    #     Ring.find_nodes(state.ring, key, map_size(state.alive_nodes) + 1)
 
-      last_requested_index =
-        to_request
-        |> Enum.map(fn {node, _hint} ->
-          Enum.find_index(all_nodes, &(&1 == node))
-        end)
-        |> Enum.max()
+    #   last_requested_index =
+    #     to_request
+    #     |> Enum.map(fn {node, _hint} ->
+    #       Enum.find_index(all_nodes, &(&1 == node))
+    #     end)
+    #     |> Enum.max()
 
-      %{
-        state
-        | puts_queue:
-            Map.put(state.puts_queue, nonce, %{
-              client: client,
-              key: key,
-              value: value,
-              context: context,
-              responses: MapSet.new(),
-              requested: Map.new(to_request),
-              last_requested_index: last_requested_index
-            })
-      }
+    #   %{
+    #     state
+    #     | puts_queue:
+    #         Map.put(state.puts_queue, nonce, %{
+    #           client: client,
+    #           key: key,
+    #           value: value,
+    #           context: context,
+    #           responses: MapSet.new(),
+    #           requested: Map.new(to_request),
+    #           last_requested_index: last_requested_index
+    #         })
+    #   }
     end
   end
 
@@ -1114,8 +1143,9 @@ defmodule DynamoNode do
   @spec coordinator_put_response(%DynamoNode{}, any(), %CoordinatorPutResponse{}) ::
           %DynamoNode{}
   def coordinator_put_response(state, node, %CoordinatorPutResponse{
-        nonce: nonce
-      }) do
+    nonce: nonce
+  }) do
+
     old_req_state = Map.get(state.puts_queue, nonce)
 
     new_req_state =
@@ -1161,14 +1191,13 @@ defmodule DynamoNode do
     end
   end
 
-    @doc """
-    Return a list of the top `n` healthy nodes for a particular key,
-    along with the originally intended recipient (who's dead) and nil
-    if it is the intended recipient.
-    """
-  @spec get_alive_preference_list_with_intended(%DynamoNode{}, any()) :: [
-    {any(), any() | nil}
-  ]
+  @doc """
+  Return a list of the top `n` healthy nodes for a particular key,
+  along with the originally intended recipient (who's dead) and nil
+  if it is the intended recipient.
+  """
+  @spec get_alive_preference_list_with_intended(%DynamoNode{}, any()) 
+    :: [ {any(), any() | nil} ]
   def get_alive_preference_list_with_intended(state, key) do
     orig_pref_list = get_preference_list(state, key)
     alive_pref_list = get_alive_preference_list(state, key)
