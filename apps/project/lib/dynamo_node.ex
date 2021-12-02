@@ -1097,37 +1097,31 @@ defmodule DynamoNode do
       })
 
       state
-    # else
-    #   # otherwise, start timer for the responses and mark pending
-    #   timer(
-    #     state.coordinator_timeout,
-    #     ## TODO### This timeout may be wrong
-    #     {:total_coordinator_timeout, :put, nonce}
-    #   )
+    else
+      # otherwise, mark pending
+      all_nodes =
+        Ring.find_nodes(state.ring, key, map_size(state.alive_nodes) + 1)
 
-    #   all_nodes =
-    #     Ring.find_nodes(state.ring, key, map_size(state.alive_nodes) + 1)
+      last_requested_index =
+        to_request
+        |> Enum.map(fn {node, _hint} ->
+          Enum.find_index(all_nodes, &(&1 == node))
+        end)
+        |> Enum.max()
 
-    #   last_requested_index =
-    #     to_request
-    #     |> Enum.map(fn {node, _hint} ->
-    #       Enum.find_index(all_nodes, &(&1 == node))
-    #     end)
-    #     |> Enum.max()
-
-    #   %{
-    #     state
-    #     | puts_queue:
-    #         Map.put(state.puts_queue, nonce, %{
-    #           client: client,
-    #           key: key,
-    #           value: value,
-    #           context: context,
-    #           responses: MapSet.new(),
-    #           requested: Map.new(to_request),
-    #           last_requested_index: last_requested_index
-    #         })
-    #   }
+      %{
+        state
+        | puts_queue:
+            Map.put(state.puts_queue, nonce, %{
+              client: client,
+              key: key,
+              value: value,
+              context: context,
+              responses: MapSet.new(),
+              requested: Map.new(to_request),
+              last_requested_index: last_requested_index
+            })
+      }
     end
   end
 
