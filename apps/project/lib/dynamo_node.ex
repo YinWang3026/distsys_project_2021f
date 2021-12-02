@@ -32,7 +32,7 @@ defmodule DynamoNode do
     # Hash ring for the dynamo cluster
     ring: Ring.t(),
 
-    # Timeout for failing client request
+    # Timeout that client request needs to be responded in
     client_timeout: pos_integer(),
 
     # Timeout for redirecting request to coordinator 
@@ -83,7 +83,7 @@ defmodule DynamoNode do
     },
 
     # Pending handoffs to be forwarded to the appropriate node
-    # {node => %{}}
+    # {node => %{key => Context}}
     handoffs_queue: %{
       required(any()) => %{
         required(pos_integer()) => %{
