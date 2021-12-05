@@ -19,9 +19,15 @@ defmodule DynamoNode do
     id: any(),
 
     # Dynamo Parameters N, R and W
-    n: pos_integer(),
-    r: pos_integer(),
-    w: pos_integer(),
+    n: pos_integer(), # Number of nodes in preference list
+    r: pos_integer(), # Number of nodes need to respond to a get request
+    w: pos_integer(), # Number of nodes need to respond to a put request
+
+    # Log of all put operations 
+    log: list(),
+
+    # # Merkle tree
+    tree: MerkleTree.t(),
 
     # Key Value store of each node
     store: %{required(any()) => {[any()], %Context{}}},
@@ -98,6 +104,8 @@ defmodule DynamoNode do
     :n,
     :r,
     :w,
+    :log,
+    :tree,
     :store,
     :alive_nodes,
     :ring,
@@ -117,6 +125,8 @@ defmodule DynamoNode do
     :n,
     :r,
     :w,
+    :log,
+    :tree,
     :store,
     :alive_nodes,
     :ring,
@@ -166,13 +176,30 @@ defmodule DynamoNode do
     ring = Ring.new(nodes, 1)
 
     # store only the data that's assigned to this node
-    store =
+    my_data =
       data
       |> Enum.filter(fn {k, _v} ->
         id in Ring.find_nodes(ring, k, n)
       end)
+
+    store = 
+      my_data
       |> Map.new(fn {k, v} ->
         {k, {[v], %Context{version: VectorClock.new()}}}
+      end)
+
+    # 1. Add to log
+    log = 
+      my_data
+      |> Enum.reduce([], fn v, acc -> 
+        acc ++ [v]
+      end)
+    
+    # 2. Add to tree
+    tree = 
+      my_data
+      |> Enum.reduce(MerkleTree.new(), fn {_k, v}, acc ->
+        MerkleTree.insert(acc, :crypto.hash(:md5, <<v>>))
       end)
 
     alive_nodes =
@@ -185,6 +212,8 @@ defmodule DynamoNode do
       n: n,
       r: r,
       w: w,
+      log: log,
+      tree: tree,
       store: store,
       alive_nodes: alive_nodes,
       ring: ring,
@@ -609,10 +638,112 @@ defmodule DynamoNode do
       # replica synchronization
       :merkle_sync_timeout = msg ->
         Logger.info("Received #{inspect(msg)}")
-        #TODO: Add merkle tree logic
 
-        # restart the timer
-        timer(state.merkle_sync_timeout, :merkle_sync_timeout)
+        alive_nodes =
+          for {node, true} <- state.alive_nodes do
+            node
+          end
+
+        if not Enum.empty?(alive_nodes) do
+          syncing_with = Enum.random(alive_nodes)
+          Logger.debug("Syncing with #{inspect(syncing_with)}")
+
+          # figure out intersection of keys
+          common_keys =
+            state.store
+            |> Map.keys()
+            |> Enum.filter(fn key ->
+              pref_list = get_preference_list(state, key)
+              syncing_with in pref_list and state.id in pref_list
+            end)
+
+          # create a Merkle tree from the keys
+          tree =
+            state.store
+            |> Map.take(common_keys)
+            |> Enum.reduce(MerkleTree.new(), fn {_key, {value, _context}}, acc ->
+                MerkleTree.insert(acc, :crypto.hash(:md5, <<value>>))
+              end)
+
+          send(syncing_with, %MerkleSyncRequest{tree: tree})
+
+          timer(state.merkle_sync_timeout, :merkle_sync_timeout)
+        end
+
+        listener(state)
+
+      {syncing_with, %MerkleSyncRequest{tree: tree} = msg} ->
+        Logger.info("Received #{inspect(msg)} from #{inspect(syncing_with)}")
+
+        # figure out intersection of keys
+        common_keys =
+          state.store
+          |> Map.keys()
+          |> Enum.filter(fn key ->
+            pref_list = get_preference_list(state, key)
+            syncing_with in pref_list and state.id in pref_list
+          end)
+
+        # create a Merkle tree from the keys
+        tree_self =
+          state.store
+          |> Map.take(common_keys)
+          |> Enum.reduce(MerkleTree.new(), fn {_key, {value, _context}}, acc ->
+              MerkleTree.insert(acc, :crypto.hash(:md5, <<value>>))
+            end)
+
+        if MerkleTree.get_root_hash(tree) == MerkleTree.get_root_hash(tree_self) do
+          # same tree respond ok
+          send(syncing_with, %MerkleSyncResponse{success: true})
+        else
+          # diff tree request data
+          send(syncing_with, %MerkleSyncResponse{success: false})
+        end
+
+        listener(state)
+
+      {syncing_with, %MerkleSyncResponse{success: success} = msg} ->
+        Logger.info("Received #{inspect(msg)} from #{inspect(syncing_with)}")
+        
+        # same merkle tree, we are done
+        if success == true do
+          listener(state)
+        end
+
+        # figure out intersection of keys
+        common_keys =
+          state.store
+          |> Map.keys()
+          |> Enum.filter(fn key ->
+            pref_list = get_preference_list(state, key)
+            syncing_with in pref_list and state.id in pref_list
+          end)
+
+        # send data for these common keys
+        # but don't send the hints
+        common_data =
+          for {key, {value, context}} <- Map.take(state.store, common_keys), into: %{} do
+            {key, {value, %{context | hint: nil}}}
+          end
+
+        send(syncing_with, %SyncDataRequest{data: common_data})
+        listener(state)
+
+      {node, %SyncDataRequest{data: data} = msg} ->
+        Logger.info("Received #{inspect(msg)} from #{inspect(node)}")
+        # put this data in our store
+        state = put_all(state, data)
+
+        # respond with (possibly updated) values of the keys in data
+        resp_data = Map.take(state.store, Map.keys(data))
+        send(node, %SyncDataResponse{data: resp_data})
+
+        listener(state)
+
+      {node, %SyncDataResponse{data: data} = msg} ->
+        Logger.info("Received #{inspect(msg)} from #{inspect(node)}")
+        # put this data in our store
+        state = put_all(state, data)
         listener(state)
 
       # testing
@@ -691,9 +822,19 @@ defmodule DynamoNode do
         merge_values(new_value, orig_value)
       end)
 
-    ## TODO ### 
-    ## MERKLE TREE ####
+    # 1. Add [key, [values]] to log
+    new_log = state.log ++ [values]
 
+    # 2. Insert to Merkle tree
+    hash =
+      values
+      |> Enum.reduce(0, fn v, acc -> 
+        :crypto.hash(:md5, <<acc>> <> <<v>>)
+      end)
+    new_tree = MerkleTree.insert(state.tree, hash)
+
+    state = %{state | log: new_log}
+    state = %{state | tree: new_tree}
     %{state | store: new_store}
   end
 
@@ -1207,4 +1348,34 @@ defmodule DynamoNode do
     {node, Map.get(hints, node)}
     end)
   end
+
+  @doc """
+  Add `key`-`value` association to local storage,
+  squashing any outdated versions.
+  """
+  @spec put(%DynamoNode{}, any(), [any()], %Context{}) :: %DynamoNode{}
+  def put(state, key, values, context) do
+    Logger.debug("Writing #{inspect(values)} to key #{inspect(key)}")
+
+    new_value = {values, context}
+
+    new_store =
+      Map.update(state.store, key, new_value, fn orig_value ->
+        merge_values(new_value, orig_value)
+      end)
+
+    %{state | store: new_store}
+  end
+
+  @doc """
+  Add all `key`-`value` association to local storage.
+  """
+  @spec put_all(%DynamoNode{}, %{required(any()) => {[any()], %Context{}}}) ::
+          %DynamoNode{}
+  def put_all(state, data) do
+    Enum.reduce(data, state, fn {key, {values, context}}, state_acc ->
+      put(state_acc, key, values, context)
+    end)
+  end
+
 end

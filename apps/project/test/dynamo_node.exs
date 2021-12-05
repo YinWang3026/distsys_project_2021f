@@ -100,7 +100,7 @@ defmodule DynamoNodeTest do
             spawn(node, fn ->
               DynamoNode.init(
                 node,
-                %{foo: 42},
+                %{foo: 42, bar: 62},
                 nodes,
                 1,
                 1,

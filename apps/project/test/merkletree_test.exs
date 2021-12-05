@@ -1,5 +1,4 @@
 defmodule MerkleTreeTest do
-
     use ExUnit.Case
 
     doctest MerkleTree
@@ -110,4 +109,42 @@ defmodule MerkleTreeTest do
         end
 
     end
+
+    test "Test compare merkle tree" do
+        aTree = MerkleTree.new()
+        # 128 bits for md5
+        h1 = :crypto.hash(:md5, <<"HI">>) # <<191, 140, 20, 65, 64, 177, 91, 239, 184, 206, 102, 38, 50, 167, 183, 110>>
+        h2 = :crypto.hash(:md5, <<"I AM YIN">>) # <<87, 232, 159, 168, 114, 169, 139, 69, 126, 98, 118, 150, 100, 207, 73, 34>>
+        h3 = :crypto.hash(:md5, <<"THIS IS DIST SYS">>) # <<202, 131, 189, 86, 8, 5, 202, 50, 31, 118, 229, 137, 204, 6, 23, 78>>
+        h4 = :crypto.hash(:md5, <<"PROJECT DYNAMO">>) # <<33, 227, 233, 6, 27, 75, 153, 23, 0, 222, 243, 76, 127, 212, 173, 75>>
+        h5 = :crypto.hash(:md5, <<12,23,45,56>>) # <<212, 84, 233, 244, 41, 222, 8, 168, 214, 184, 144, 186, 6, 226, 191, 226>>
+        h6 = :crypto.hash(:md5, "What is up") # <<219, 174, 69, 8, 139, 82, 240, 216, 90, 28, 137, 111, 236, 207, 197, 58>>
+        h7 = :crypto.hash(:md5, "Full Merkle tree test") # <<229, 140, 75, 230, 164, 73, 63, 23, 154, 128, 216, 50, 5, 43, 128, 46>>
+        h8 = :crypto.hash(:md5, "1+1=3 maybe") # <<196, 55, 230, 34, 27, 73, 69, 116, 132, 119, 132, 185, 151, 245, 15, 112>>
+
+        aTree = MerkleTree.insert(aTree, h1)
+        aTree = MerkleTree.insert(aTree, h2)
+        aTree = MerkleTree.insert(aTree, h3)
+        aTree = MerkleTree.insert(aTree, h4)
+        aTree = MerkleTree.insert(aTree, h5)
+        aTree = MerkleTree.insert(aTree, h6)
+        aTree = MerkleTree.insert(aTree, h7)
+        aTree = MerkleTree.insert(aTree, h8)
+
+        bTree = MerkleTree.new()
+
+        h_diff = :crypto.hash(:md5, <<"c">>) # <<191, 140, 20, 65, 64, 177, 91, 239, 184, 206, 102, 38, 50, 167, 183, 110>>
+
+        bTree = MerkleTree.insert(bTree, h1)
+        bTree = MerkleTree.insert(bTree, h2)
+        bTree = MerkleTree.insert(bTree, h3)
+        bTree = MerkleTree.insert(bTree, h4)
+        bTree = MerkleTree.insert(bTree, h5)
+        bTree = MerkleTree.insert(bTree, h6)
+        bTree = MerkleTree.insert(bTree, h7)
+        bTree = MerkleTree.insert(bTree, h_diff)
+
+        assert MerkleTree.compare_tree(aTree, bTree) == 7
+    end
+
 end
