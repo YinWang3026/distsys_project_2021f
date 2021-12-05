@@ -23,11 +23,11 @@ defmodule DynamoNode do
     r: pos_integer(), # Number of nodes need to respond to a get request
     w: pos_integer(), # Number of nodes need to respond to a put request
 
-    # Log of all put operations 
-    log: list(),
+    # # Log of all put operations 
+    # log: list(),
 
-    # # Merkle tree
-    tree: MerkleTree.t(),
+    # # # Merkle tree
+    # tree: MerkleTree.t(),
 
     # Key Value store of each node
     store: %{required(any()) => {[any()], %Context{}}},
@@ -104,8 +104,8 @@ defmodule DynamoNode do
     :n,
     :r,
     :w,
-    :log,
-    :tree,
+    # :log,
+    # :tree,
     :store,
     :alive_nodes,
     :ring,
@@ -125,8 +125,8 @@ defmodule DynamoNode do
     :n,
     :r,
     :w,
-    :log,
-    :tree,
+    # :log,
+    # :tree,
     :store,
     :alive_nodes,
     :ring,
@@ -188,19 +188,19 @@ defmodule DynamoNode do
         {k, {[v], %Context{version: VectorClock.new()}}}
       end)
 
-    # 1. Add to log
-    log = 
-      my_data
-      |> Enum.reduce([], fn v, acc -> 
-        acc ++ [v]
-      end)
+    # # 1. Add to log
+    # log = 
+    #   my_data
+    #   |> Enum.reduce([], fn v, acc -> 
+    #     acc ++ [v]
+    #   end)
     
-    # 2. Add to tree
-    tree = 
-      my_data
-      |> Enum.reduce(MerkleTree.new(), fn {_k, v}, acc ->
-        MerkleTree.insert(acc, :crypto.hash(:md5, <<v>>))
-      end)
+    # # 2. Add to tree
+    # tree = 
+    #   my_data
+    #   |> Enum.reduce(MerkleTree.new(), fn {_k, v}, acc ->
+    #     MerkleTree.insert(acc, :crypto.hash(:md5, <<v>>))
+    #   end)
 
     alive_nodes =
       nodes
@@ -212,8 +212,8 @@ defmodule DynamoNode do
       n: n,
       r: r,
       w: w,
-      log: log,
-      tree: tree,
+      # log: log,
+      # tree: tree,
       store: store,
       alive_nodes: alive_nodes,
       ring: ring,
@@ -612,6 +612,33 @@ defmodule DynamoNode do
           listener(state)
         end
 
+              # handoff timeout
+      {:handoff_timeout, nonce, node} = msg ->
+        # consider node dead, we'll retry handoff later
+        # when it comes alive
+        Logger.info("Received #{inspect(msg)}")
+
+        node_pending_handoffs = Map.get(state.handoffs_queue, node, %{})
+
+        if Map.has_key?(node_pending_handoffs, nonce) do
+          # didn't receive response before this timeout
+          # so mark node dead, and remove this from pending
+          state = mark_dead(state, node)
+
+          new_node_pending_handoffs = Map.delete(node_pending_handoffs, nonce)
+
+          state = %{
+            state
+            | handoffs_queue:
+                Map.put(state.handoffs_queue, node, new_node_pending_handoffs)
+          }
+
+          listener(state)
+        else
+          # already handed off, so ignore
+          listener(state)
+        end
+
       # health checks
       :health_check_timeout = msg ->
         Logger.debug("Received #{inspect(msg)}")
@@ -662,7 +689,8 @@ defmodule DynamoNode do
             state.store
             |> Map.take(common_keys)
             |> Enum.reduce(MerkleTree.new(), fn {_key, {value, _context}}, acc ->
-                MerkleTree.insert(acc, :crypto.hash(:md5, <<value>>))
+                hash = :crypto.hash(:md5, Enum.join(value,""))
+                MerkleTree.insert(acc, hash)
               end)
 
           send(syncing_with, %MerkleSyncRequest{tree: tree})
@@ -689,7 +717,8 @@ defmodule DynamoNode do
           state.store
           |> Map.take(common_keys)
           |> Enum.reduce(MerkleTree.new(), fn {_key, {value, _context}}, acc ->
-              MerkleTree.insert(acc, :crypto.hash(:md5, <<value>>))
+                hash = :crypto.hash(:md5, Enum.join(value,""))
+                MerkleTree.insert(acc, hash)
             end)
 
         if MerkleTree.get_root_hash(tree) == MerkleTree.get_root_hash(tree_self) do
@@ -744,6 +773,12 @@ defmodule DynamoNode do
         Logger.info("Received #{inspect(msg)} from #{inspect(node)}")
         # put this data in our store
         state = put_all(state, data)
+        listener(state)
+
+      # crash the node
+      {_from, :crash} = msg ->
+        Logger.info("Received #{inspect(msg)}")
+        state = crash(state)
         listener(state)
 
       # testing
@@ -822,19 +857,19 @@ defmodule DynamoNode do
         merge_values(new_value, orig_value)
       end)
 
-    # 1. Add [key, [values]] to log
-    new_log = state.log ++ [values]
+    # # 1. Add [key, [values]] to log
+    # new_log = state.log ++ [values]
 
-    # 2. Insert to Merkle tree
-    hash =
-      values
-      |> Enum.reduce(0, fn v, acc -> 
-        :crypto.hash(:md5, <<acc>> <> <<v>>)
-      end)
-    new_tree = MerkleTree.insert(state.tree, hash)
+    # # 2. Insert to Merkle tree
+    # hash =
+    #   values
+    #   |> Enum.reduce(0, fn v, acc -> 
+    #     :crypto.hash(:md5, <<acc>> <> <<v>>)
+    #   end)
+    # new_tree = MerkleTree.insert(state.tree, hash)
 
-    state = %{state | log: new_log}
-    state = %{state | tree: new_tree}
+    # state = %{state | log: new_log}
+    # state = %{state | tree: new_tree}
     %{state | store: new_store}
   end
 
@@ -1376,6 +1411,54 @@ defmodule DynamoNode do
     Enum.reduce(data, state, fn {key, {values, context}}, state_acc ->
       put(state_acc, key, values, context)
     end)
+  end
+
+  @doc """
+  Simulate a node crash.
+  Wipe transient data and wait for a :recover message.
+  """
+  @spec crash(%DynamoNode{}) :: %DynamoNode{}
+  def crash(state) do
+    wiped_state = %DynamoNode{
+      id: state.id,
+      n: state.n,
+      r: state.r,
+      w: state.w,
+      # log: state.log,
+      # tree: state.tree,
+      store: state.store,
+      alive_nodes:
+        Map.new(state.alive_nodes, fn {node, _alive} -> {node, true} end),
+      ring: state.ring,
+      client_timeout: state.client_timeout,
+      redirect_timeout: state.redirect_timeout,
+      request_timeout: state.request_timeout,
+      health_check_timeout: state.health_check_timeout,
+      merkle_sync_timeout: state.merkle_sync_timeout,
+      gets_queue: %{},
+      puts_queue: %{},
+      redirect_queue: %{},
+      handoffs_queue: %{}
+    }
+
+    crash_wait_loop()
+
+    timer(state.health_check_timeout, :health_check_timeout)
+    timer(state.merkle_sync_timeout, :merkle_sync_timeout)
+    wiped_state
+  end
+
+  # wait for a :recover msg, ignoring all others
+  defp crash_wait_loop do
+    receive do
+      {_from, :recover} = msg ->
+        Logger.info("Received #{inspect(msg)}")
+        # Logger.critical("Recovered")
+
+      other_msg ->
+        Logger.debug("Dead, ignoring #{inspect(other_msg)}")
+        crash_wait_loop()
+    end
   end
 
 end

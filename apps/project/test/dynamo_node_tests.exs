@@ -9,7 +9,7 @@ defmodule DynamoNodeTest do
     import Kernel,
       except: [spawn: 3, spawn: 1, spawn_link: 1, spawn_link: 3, send: 2]
   
-    alias ExHashRing.Ring
+    alias ExHashRing.HashRing, as: Ring
   
     setup do
       Emulation.init()
@@ -230,5 +230,58 @@ defmodule DynamoNodeTest do
                      },
                      5_000
     end
+
+  test "Replicas sync after a while" do
+    nodes = [:a, :b, :c, :d]
+    n = 3
+    w = 3
+    DynamoUtils.new_cluster(%{foo: 42}, nodes, n, w, w, 9999, 9999, 200, 500, 200)
+
+    pref_list =
+      Ring.find_nodes(Ring.new(nodes, 1), :foo, Enum.count(nodes))
+
+    Logger.debug("preference list: #{inspect(pref_list)}")
+
+    [pref_1, pref_2, _pref_3, pref_4] = pref_list
+
+    send(pref_2, :crash)
+
+    # send get request so coordinator knows pref_2 has crashed
+    send(pref_1, %ClientGetRequest{nonce: DynamoUtils.generate_nonce(), key: :foo})
+    wait(1000)
+
+    # send put request to establish hinted data at pref_4
+    put_nonce = DynamoUtils.generate_nonce()
+
+    send(pref_1, %ClientPutRequest{
+      nonce: put_nonce,
+      key: :foo,
+      value: 49,
+      context: new_context()
+    })
+
+    wait(500)
+
+    # hint should be present at pref_4 by now
+    # now crash it before it can hand off
+    send(pref_4, :crash)
+    wait(200)
+
+    # crashed node now recovers
+    send(pref_2, :recover)
+
+    # other nodes should figure this out after a while due to alive_check_interval
+    wait(500 + 200)
+
+    # after a while, one of pref_1 and pref_3 should sync with pref_2 (or vice-versa)
+    wait(600)
+
+    # pref_2 should now have been synced
+    test_nonce = DynamoUtils.generate_nonce()
+    send(pref_2, %GetStateRequest{nonce: test_nonce})
+    assert_receive %GetStateResponse{nonce: ^test_nonce, state: pref_2_state}, 500
+
+    assert {[49], _context} = Map.get(pref_2_state.store, :foo)
+  end
 end
   
