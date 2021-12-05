@@ -308,4 +308,68 @@ defmodule Context do
       :nonce
     ])
   end
+
+  defmodule MerkleSyncRequest do
+    @typedoc """
+    Request to sync merkle tree
+    """
+    alias __MODULE__
+
+    @type t() :: %__MODULE__{
+      tree: Merkletree.t()
+    }
+    
+    @enforce_keys [:tree]
+    defstruct([
+      :tree
+    ])
+  end
+
+
+  defmodule MerkleSyncResponse do
+    @typedoc """
+    Response to sync merkle tree
+    """
+    alias __MODULE__
+
+    @type t() :: %__MODULE__{
+      success: boolean()
+    }
+    
+    @enforce_keys [:success]
+    defstruct([
+      :success
+    ])
+  end
+
+  defmodule SyncDataRequest do
+    @typedoc """
+    Request to sync data
+    """
+    alias __MODULE__
+
+    @type t() :: %__MODULE__{
+      data: map()
+    }
+    
+    @enforce_keys [:data]
+    defstruct([
+      :data
+    ])
+  end
   
+  defmodule SyncDataResponse do
+    @typedoc """
+    Response to sync data
+    """
+    alias __MODULE__
+
+    @type t() :: %__MODULE__{
+      data: map()
+    }
+    
+    @enforce_keys [:data]
+    defstruct([
+      :data
+    ])
+  end

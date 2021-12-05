@@ -7,7 +7,15 @@ defmodule MerkleTree do
     MerkleTree implementation.
     """
     import Kernel, except: [spawn: 3, spawn: 1, spawn_link: 1, spawn_link: 3, send: 2]
-    alias __MODULE__
+    
+    alias __MODULE__ 
+    
+    @type t() :: %__MODULE__{
+        matrix: list(list(any())),
+        root_level: non_neg_integer(),
+        leaf_count: non_neg_integer()
+    }
+
     @enforce_keys [:matrix, :root_level, :leaf_count]
     defstruct(
         matrix: nil, # The matrix holding the tree
@@ -23,7 +31,7 @@ defmodule MerkleTree do
     used for convenience.
     """
     @spec new() :: %MerkleTree{
-        matrix: list(),
+        matrix: list(list(any())),
         root_level: non_neg_integer(),
         leaf_count: non_neg_integer()
     }
@@ -103,8 +111,8 @@ defmodule MerkleTree do
         leaf_count: non_neg_integer()
     }
     def insert(tree, bytes) when is_binary(bytes) do
-        IO.puts("Inserting ...")
-        IO.inspect(bytes, binaries: :as_binaries)
+        # IO.puts("Inserting ...")
+        # IO.inspect(bytes, binaries: :as_binaries)
 
         ## Add the new value to 0th row
         new_matrix = append_to_row(tree.matrix, 0, bytes)
@@ -124,7 +132,7 @@ defmodule MerkleTree do
         ## Update
         tree = %{ tree | matrix: new_matrix }
         tree = %{ tree | leaf_count: new_leaf_count }
-        tree = %{ tree | root_level: new_root_level }
+        %{ tree | root_level: new_root_level }
     end
 
     @doc """
@@ -148,5 +156,58 @@ defmodule MerkleTree do
         end
     end
 
+    @doc """
+    Called by the reciever, tree_receiver
+    sender's tree, tree_sender
+    If my tree is not as update to date, request data
+    If my tree is more update, do nothing
+    """
+    @spec compare_tree(%MerkleTree{}, %MerkleTree{}) :: :same | :do_nothing | non_neg_integer()
+    def compare_tree(tree_sender, tree_receiver) do
+        cond do
+            tree_sender.root_level == 0 and tree_receiver.root_level != 0 ->
+                0 # I have more entries, send everything to the sender
+            tree_sender.root_level != 0 and tree_receiver.root_level == 0 ->
+                :do_nothing
+            tree_sender.root_level == 0 and tree_receiver.root_level == 0 ->
+                :same
+            tree_sender.root_level > tree_receiver.root_level ->
+                :do_nothing # Sender has more items than me
+            tree_sender.root_level < tree_receiver.root_level ->
+                0 # I have more entries, send everything to the sender
+            get_root_hash(tree_sender) == get_root_hash(tree_receiver) ->
+                # Same root hash, we done
+                :same
+            true ->
+                # Same height, time to compare row by row
+                compare_tree_row(tree_sender, tree_receiver, tree_receiver.root_level-1, 0)
+        end
+    end
+
+    @spec compare_tree_row(%MerkleTree{}, %MerkleTree{}, non_neg_integer(), non_neg_integer())
+        :: non_neg_integer()
+    defp compare_tree_row(tree_sender, tree_receiver, row, idx) do
+        row_sender = Enum.at(tree_sender.matrix, row)
+        row_receiver = Enum.at(tree_receiver.matrix, row)
+        if row == 0 do
+            # Last row, no more to check
+            if Enum.at(row_receiver, idx) == Enum.at(row_sender, idx) do
+                idx + 1
+            else
+                idx
+            end
+        else
+            mismatch_idx =
+                Enum.zip(row_sender, row_receiver) 
+                |> Enum.map(fn {s, r} -> s == r end) 
+                |> Enum.with_index()
+                |> Enum.reduce_while(nil, fn {r, i}, acc -> if r == true, do: {:cont, acc}, else: {:halt, i} end)
+            
+            # Calculate the starting mismatch index
+            current_idx = mismatch_idx * round(:math.pow(2, row))
+            # Take the better idx
+            compare_tree_row(tree_sender, tree_receiver, row-1, max(idx, current_idx))
+        end
+    end
 end
 
