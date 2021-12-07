@@ -3,6 +3,7 @@ defmodule Fuzzers do
   Fuzzers is a set of network fuzzing tools.
   """
   @delay :delay
+  @delay_map :delay_map
   @drop :drop
   @record_drop :rec_drop
   @fail :fail
@@ -58,6 +59,56 @@ defmodule Fuzzers do
 
   defp inject_delay(receiver, id, mean) do
     inject_delay(receiver, id, :queue.new(), mean)
+  end
+
+  @spec inject_delay_map(pid(), atom() | pid(), any(), map()) :: no_return()
+  defp inject_delay_map(recver, id, q, msg_map) do
+    receive do
+      {:proc, ^id, msg} ->
+        nq = :queue.in(msg, q)
+
+        if :queue.is_empty(q) do
+          if is_map(msg) do
+            val = Map.get(msg_map, inspect(msg.__struct__))
+            cond do
+              val == nil -> Process.send_after(self(), :time, 0)
+              true -> Process.send_after(self(), :time, random_delay(val))
+            end
+          end
+        end
+
+        inject_delay_map(recver, id, nq, msg_map)
+
+      {:control_proc, msg} ->
+        send(recver, {:control_proc, msg})
+        inject_delay_map(recver, id, q, msg_map)
+
+      :time ->
+        case :queue.out(q) do
+          {{:value, msg}, nq} ->
+            send(recver, {:proc, id, msg})
+
+            unless :queue.is_empty(nq) do
+              if is_map(msg) do
+                val = Map.get(msg_map, inspect(msg.__struct__))
+                cond do
+                  val == nil -> Process.send_after(self(), :time, 0)
+                  true -> Process.send_after(self(), :time, random_delay(val))
+                end
+              end
+            end
+
+            inject_delay_map(recver, id, nq, msg_map)
+        end
+
+      m ->
+        raise EmulatorError,
+          message: "Message not sent using emulation #{inspect(m)}"
+    end
+  end
+
+  defp inject_delay_map(receiver, id, msg_map) do
+    inject_delay_map(receiver, id, :queue.new(), msg_map)
   end
 
   defp random_drop(recver, id, p) do
@@ -267,6 +318,9 @@ defmodule Fuzzers do
       {@delay, t} when is_number(t) ->
         spawn_link(fn -> inject_delay(recver, sender_id, t) end)
 
+      {@delay_map, t} when is_map(t) ->
+          spawn_link(fn -> inject_delay_map(recver, sender_id, t) end)
+
       {@drop, p} when is_number(p) ->
         spawn_link(fn -> random_drop(recver, sender_id, p) end)
 
@@ -325,6 +379,15 @@ defmodule Fuzzers do
   @spec delay(number()) :: {:delay, float()}
   def delay(t) do
     {:delay, t}
+  end
+
+  @doc """
+  Fuzzer for delaying specifc messages. Delays are drawn from
+  an exponential distribution with the mean given here.
+  """
+  @spec delay_map(map()) :: {:delay_map, map()}
+  def delay_map(msg_map) do
+    {:delay_map, msg_map}
   end
 
   @doc """
