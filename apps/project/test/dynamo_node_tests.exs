@@ -13,6 +13,7 @@ defmodule DynamoNodeTest do
   
     setup do
       Emulation.init()
+      Emulation.append_fuzzers([Fuzzers.delay_map(%{"CoordinatorGetRequest" => 5})])
       Process.register(self(), :test_proc)
       Emulation.mark_unfuzzable()
       :ok
@@ -441,6 +442,42 @@ defmodule DynamoNodeTest do
                        context: nil
                      },
                      1_000
+    end
+
+    test "Follower considers crashed coordinator dead after trying to redirect" do
+      data = Map.new(1..100, fn key -> {key, key * 42} end)
+  
+      DynamoUtils.new_cluster(
+        data,
+        [:a, :gonna_crash],
+        1,
+        1,
+        1,
+        1_000,
+        1_000,
+        200,
+        500,
+        700
+      )
+  
+      send(:gonna_crash, :crash)
+  
+      # generate bunch of traffic so that :gonna_crash becomes
+      # a coordinator at least once
+      Enum.each(data, fn {key, _val} ->
+        send(:a, %ClientGetRequest{
+          nonce: DynamoUtils.generate_nonce(),
+          key: key
+        })
+      end)
+  
+      # wait for the dust to settle
+      wait(1_200)
+  
+      nonce = DynamoUtils.generate_nonce()
+      send(:a, %GetStateRequest{nonce: nonce})
+      assert_receive %GetStateResponse{nonce: ^nonce, state: state}, 500
+      assert state.alive_nodes == %{gonna_crash: false}
     end
 end
   

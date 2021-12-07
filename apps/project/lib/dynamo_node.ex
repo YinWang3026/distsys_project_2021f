@@ -385,7 +385,7 @@ defmodule DynamoNode do
             nil ->
               # request already been handled
               state
-            true ->
+            _ ->
               # redirect request still in queue, remove it
               %{
                 state
@@ -417,7 +417,7 @@ defmodule DynamoNode do
             nil ->
               # request already been handled
               state
-            true ->
+            _ ->
               # redirect request still in queue, remove it
               %{
                 state
@@ -612,25 +612,63 @@ defmodule DynamoNode do
           listener(state)
         end
 
-              # handoff timeout
+      # handoffs
+      {node,
+       %HandoffRequest{
+         nonce: nonce,
+         data: data
+       } = msg} ->
+        Logger.info("Received #{inspect(msg)} from #{inspect(node)}")
+        state = mark_alive(state, node)
+        state = put_all(state, data)
+
+        # send acknowledgement
+        send(node, %HandoffResponse{nonce: nonce})
+
+        listener(state)
+
+      {node, %HandoffResponse{nonce: nonce} = msg} ->
+        Logger.info("Received #{inspect(msg)} from #{inspect(node)}")
+        state = mark_alive(state, node)
+
+        node_handoffs_queue = Map.get(state.handoffs_queue, node, %{})
+
+        if not Map.has_key?(node_handoffs_queue, nonce) do
+          # this handoff timed out already, so ignore this response
+          listener(state)
+        else
+          {keys, new_node_handoffs_queue} =
+            Map.pop!(node_handoffs_queue, nonce)
+
+          state = %{
+            state
+            | handoffs_queue:
+                Map.put(state.handoffs_queue, node, new_node_handoffs_queue)
+          }
+
+          state = delete_handed_off_keys(state, keys)
+          listener(state)
+        end
+
+      # handoff timeout
       {:handoff_timeout, nonce, node} = msg ->
         # consider node dead, we'll retry handoff later
         # when it comes alive
         Logger.info("Received #{inspect(msg)}")
 
-        node_pending_handoffs = Map.get(state.handoffs_queue, node, %{})
+        node_handoffs_queue = Map.get(state.handoffs_queue, node, %{})
 
-        if Map.has_key?(node_pending_handoffs, nonce) do
+        if Map.has_key?(node_handoffs_queue, nonce) do
           # didn't receive response before this timeout
           # so mark node dead, and remove this from pending
           state = mark_dead(state, node)
 
-          new_node_pending_handoffs = Map.delete(node_pending_handoffs, nonce)
+          new_node_handoffs_queue = Map.delete(node_handoffs_queue, nonce)
 
           state = %{
             state
             | handoffs_queue:
-                Map.put(state.handoffs_queue, node, new_node_pending_handoffs)
+                Map.put(state.handoffs_queue, node, new_node_handoffs_queue)
           }
 
           listener(state)
@@ -1410,6 +1448,41 @@ defmodule DynamoNode do
   def put_all(state, data) do
     Enum.reduce(data, state, fn {key, {values, context}}, state_acc ->
       put(state_acc, key, values, context)
+    end)
+  end
+
+  @doc """
+  Delete a key from the current node that has been handed off to original owner.
+  """
+  @spec delete_handed_off_key(%DynamoNode{}, any(), %Context{}) ::
+          %DynamoNode{}
+  def delete_handed_off_key(state, key, handed_off_context) do
+    stored = Map.get(state.store, key)
+
+    case stored do
+      nil ->
+        state
+
+      {_values, stored_context} ->
+        if Context.compare(stored_context, handed_off_context) == :after do
+          # we have newer context to hand off, so don't get rid of key
+          state
+        else
+          # we have handed off this key successfully and we don't
+          # have newer version - get rid of the key
+          %{state | store: Map.delete(state.store, key)}
+        end
+    end
+  end
+
+  @doc """
+  Delete all keys from the current node that has been handed off to original owner.
+  """
+  @spec delete_handed_off_keys(%DynamoNode{}, %{required(any()) => %Context{}}) ::
+          %DynamoNode{}
+  def delete_handed_off_keys(state, keys) do
+    Enum.reduce(keys, state, fn {key, context}, state_acc ->
+      delete_handed_off_key(state_acc, key, context)
     end)
   end
 
