@@ -22,6 +22,7 @@
 
 1. [Dynamo: Amazon’s Highly Available Key-value Store](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf).
 2. [Quantifying eventual consistency with PBS](https://shivaram.org/publications/pbs-vldb-journal.pdf).
+3. [Discord Ring](https://github.com/discord/ex_hash_ring)
 
 ## Merkle Tree
 
