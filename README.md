@@ -28,3 +28,7 @@
 - Implemented using a Binary Search Tree
 - Each node holds the hash of itself and its children
 - Only supports appending because Dynamos will only make 2 calls, get() and put()
+
+## Paper
+
+- [PDF](https://docs.google.com/document/d/1oiG08IjbvRc3l7J00PemFD1FKO7obR6JsDMkekbTIDE/edit?usp=sharing)
